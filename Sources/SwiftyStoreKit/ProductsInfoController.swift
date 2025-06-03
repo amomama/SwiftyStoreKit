@@ -75,8 +75,7 @@ class ProductsInfoController: NSObject {
                 inflightRequestsStorage[productIds] = InAppProductQuery(request: request, completionHandlers: [completion])
                 request.start()
                 returnedRequest = request
-            } else {
-                var query = inflightRequestsStorage[productIds]!
+            } else if var query = inflightRequestsStorage[productIds] {
                 query.completionHandlers.append(completion)
                 inflightRequestsStorage[productIds] = query
                 
