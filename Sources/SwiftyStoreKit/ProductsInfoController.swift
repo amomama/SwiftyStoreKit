@@ -51,53 +51,41 @@ class ProductsInfoController: NSObject {
     // As we can have multiple inflight requests, we store them in a dictionary by product ids
     private var inflightRequestsStorage: [Set<String>: InAppProductQuery] = [:]
     private let requestsQueue = DispatchQueue(label: "inflightRequestsQueue", attributes: .concurrent)
-    private var inflightRequests: [Set<String>: InAppProductQuery] {
-        get {
-            requestsQueue.sync {
-                inflightRequestsStorage
-            }
-        }
-        set {
-            requestsQueue.sync(flags: .barrier) {
-                inflightRequestsStorage = newValue
-            }
-        }
-    }
 
     @discardableResult
     func retrieveProductsInfo(_ productIds: Set<String>, completion: @escaping (RetrieveResults) -> Void) -> InAppProductRequest {
-
-        if inflightRequests[productIds] == nil {
-            let request = inAppProductRequestBuilder.request(productIds: productIds) { results in
-                
-                if let query = self.inflightRequests[productIds] {
-                    for completion in query.completionHandlers {
-                        completion(results)
+        var returnedRequest: InAppProductRequest!
+        
+        requestsQueue.sync(flags: .barrier) {
+            if inflightRequestsStorage[productIds] == nil {
+                // No existing request → create new
+                let request = inAppProductRequestBuilder.request(productIds: productIds) { results in
+                    self.requestsQueue.sync(flags: .barrier) {
+                        if let query = self.inflightRequestsStorage[productIds] {
+                            for completion in query.completionHandlers {
+                                completion(results)
+                            }
+                            self.inflightRequestsStorage[productIds] = nil
+                        } else {
+                            // should not get here, but if it does it seems reasonable to call the outer completion block
+                            completion(results)
+                        }
                     }
-                    self.inflightRequests[productIds] = nil
-                } else {
-                    // should not get here, but if it does it seems reasonable to call the outer completion block
-                    completion(results)
                 }
-            }
-            inflightRequests[productIds] = InAppProductQuery(request: request, completionHandlers: [completion])
-            request.start()
-
-            return request
-
-        } else {
-            
-            inflightRequests[productIds]!.completionHandlers.append(completion)
-
-            let query = inflightRequests[productIds]!
-
-            if query.request.hasCompleted {
-                query.completionHandlers.forEach {
-                    $0(query.request.cachedResults!)
+                inflightRequestsStorage[productIds] = InAppProductQuery(request: request, completionHandlers: [completion])
+                request.start()
+                returnedRequest = request
+            } else if var query = inflightRequestsStorage[productIds] {
+                query.completionHandlers.append(completion)
+                inflightRequestsStorage[productIds] = query
+                
+                if query.request.hasCompleted, let cached = query.request.cachedResults {
+                    query.completionHandlers.forEach { $0(cached) }
+                    inflightRequestsStorage[productIds] = nil
                 }
+                returnedRequest = query.request
             }
-
-            return inflightRequests[productIds]!.request
         }
+        return returnedRequest
     }
 }
