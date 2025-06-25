@@ -60,8 +60,9 @@ class ProductsInfoController: NSObject {
         
         return requestsQueue.sync(flags: .barrier) {
             if inflightRequestsStorage[productIds] == nil {
-                let request = inAppProductRequestBuilder.request(productIds: productIds) { results in
-                    self.requestsQueue.async(flags: .barrier) {
+                let request = inAppProductRequestBuilder.request(productIds: productIds) { [weak self] results in
+                    guard let self else { return }
+                    requestsQueue.async(flags: .barrier) {
                         guard let query = self.inflightRequestsStorage[productIds] else { return }
                         query.completionHandlers.forEach { $0(results) }
                         self.inflightRequestsStorage[productIds] = nil
@@ -73,10 +74,10 @@ class ProductsInfoController: NSObject {
                 
                 request.start()
                 return request
+            } else {
+                inflightRequestsStorage[productIds]!.completionHandlers.append(completion)
+                return inflightRequestsStorage[productIds]!.request
             }
-            
-            inflightRequestsStorage[productIds]!.completionHandlers.append(completion)
-            return inflightRequestsStorage[productIds]!.request
         }
     }
 }
