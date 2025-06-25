@@ -53,39 +53,31 @@ class ProductsInfoController: NSObject {
     private let requestsQueue = DispatchQueue(label: "inflightRequestsQueue", attributes: .concurrent)
 
     @discardableResult
-    func retrieveProductsInfo(_ productIds: Set<String>, completion: @escaping (RetrieveResults) -> Void) -> InAppProductRequest {
-        var returnedRequest: InAppProductRequest!
+    func retrieveProductsInfo(
+        _ productIds: Set<String>,
+        completion: @escaping (RetrieveResults) -> Void
+    ) -> InAppProductRequest {
         
-        requestsQueue.sync(flags: .barrier) {
+        return requestsQueue.sync(flags: .barrier) {
             if inflightRequestsStorage[productIds] == nil {
-                // No existing request → create new
-                let request = inAppProductRequestBuilder.request(productIds: productIds) { results in
-                    self.requestsQueue.sync(flags: .barrier) {
-                        if let query = self.inflightRequestsStorage[productIds] {
-                            for completion in query.completionHandlers {
-                                completion(results)
-                            }
-                            self.inflightRequestsStorage[productIds] = nil
-                        } else {
-                            // should not get here, but if it does it seems reasonable to call the outer completion block
-                            completion(results)
-                        }
+                let request = inAppProductRequestBuilder.request(productIds: productIds) { [weak self] results in
+                    guard let self else { return }
+                    requestsQueue.async(flags: .barrier) {
+                        guard let query = self.inflightRequestsStorage[productIds] else { return }
+                        query.completionHandlers.forEach { $0(results) }
+                        self.inflightRequestsStorage[productIds] = nil
                     }
                 }
-                inflightRequestsStorage[productIds] = InAppProductQuery(request: request, completionHandlers: [completion])
-                request.start()
-                returnedRequest = request
-            } else if var query = inflightRequestsStorage[productIds] {
-                query.completionHandlers.append(completion)
-                inflightRequestsStorage[productIds] = query
                 
-                if query.request.hasCompleted, let cached = query.request.cachedResults {
-                    query.completionHandlers.forEach { $0(cached) }
-                    inflightRequestsStorage[productIds] = nil
-                }
-                returnedRequest = query.request
+                inflightRequestsStorage[productIds] =
+                InAppProductQuery(request: request, completionHandlers: [completion])
+                
+                request.start()
+                return request
+            } else {
+                inflightRequestsStorage[productIds]!.completionHandlers.append(completion)
+                return inflightRequestsStorage[productIds]!.request
             }
         }
-        return returnedRequest
     }
 }
